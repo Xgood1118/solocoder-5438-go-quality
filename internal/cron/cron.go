@@ -33,10 +33,10 @@ func NewCronManager(cfg *config.Config) *CronManager {
 }
 
 func (m *CronManager) Start() {
-	m.cron.AddFunc(m.cfg.InspectionCron, m.patrolInspectionJob)
-	m.cron.AddFunc(m.cfg.SPCUpdateCron, m.spcUpdateJob)
-	m.cron.AddFunc(m.cfg.QMSUpdateCron, m.qmsSyncJob)
-	m.cron.AddFunc(m.cfg.SupplierScoreCron, m.supplierScoreJob)
+	m.cron.AddFunc(m.cfg.InspectionCron, func() { m.PatrolInspectionJob() })
+	m.cron.AddFunc(m.cfg.SPCUpdateCron, func() { m.SPCUpdateJob() })
+	m.cron.AddFunc(m.cfg.QMSUpdateCron, func() { m.QMSSyncJob() })
+	m.cron.AddFunc(m.cfg.SupplierScoreCron, func() { m.SupplierScoreJob() })
 
 	m.cron.Start()
 	log.Println("Cron jobs started")
@@ -47,10 +47,15 @@ func (m *CronManager) Stop() {
 	log.Println("Cron jobs stopped")
 }
 
-func (m *CronManager) patrolInspectionJob() {
+func (m *CronManager) PatrolInspectionJob() {
 	log.Println("Running patrol inspection job...")
 
 	inspectors := store.GlobalStore.ListInspectors()
+	if len(inspectors) == 0 {
+		log.Println("No inspectors available for patrol")
+		return
+	}
+
 	inspectorMap := make(map[string]*model.Inspector)
 	for _, ins := range inspectors {
 		for _, proc := range ins.Processes {
@@ -61,8 +66,26 @@ func (m *CronManager) patrolInspectionJob() {
 	}
 
 	lots := store.GlobalStore.ListLots()
+	allRecords := store.GlobalStore.ListRecords()
+
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	threeDaysAgo := time.Now().AddDate(0, 0, -3)
+
+	patrolCount := 0
+
 	for _, lot := range lots {
-		if lot.Status != "in_production" {
+		if lot.ProductionDate.Before(threeDaysAgo) {
+			continue
+		}
+
+		hasRecentPatrol := false
+		for _, rec := range allRecords {
+			if rec.LotID == lot.ID && rec.Type == model.TypeIPQC && rec.IPQCType == model.IPQCPatrol && rec.CreatedAt.After(oneHourAgo) {
+				hasRecentPatrol = true
+				break
+			}
+		}
+		if hasRecentPatrol {
 			continue
 		}
 
@@ -88,8 +111,8 @@ func (m *CronManager) patrolInspectionJob() {
 		}
 
 		inspector := inspectorMap[lot.ProductionLine]
-		if inspector == nil && len(inspectors) > 0 {
-			inspector = inspectors[0]
+		if inspector == nil {
+			inspector = inspectors[patrolCount%len(inspectors)]
 		}
 
 		record := &model.InspectionRecord{
@@ -111,12 +134,13 @@ func (m *CronManager) patrolInspectionJob() {
 		}
 
 		store.GlobalStore.SaveRecord(record)
+		patrolCount++
 	}
 
-	log.Println("Patrol inspection job completed")
+	log.Printf("Patrol inspection job completed, created %d new patrol records", patrolCount)
 }
 
-func (m *CronManager) spcUpdateJob() {
+func (m *CronManager) SPCUpdateJob() {
 	log.Println("Running SPC update job...")
 
 	charts := store.GlobalStore.ListSPCCharts()
@@ -139,13 +163,13 @@ func (m *CronManager) spcUpdateJob() {
 	log.Println("SPC update job completed")
 }
 
-func (m *CronManager) qmsSyncJob() {
+func (m *CronManager) QMSSyncJob() {
 	log.Println("Running QMS sync job...")
 
 	log.Println("QMS sync job completed (simulated)")
 }
 
-func (m *CronManager) supplierScoreJob() {
+func (m *CronManager) SupplierScoreJob() {
 	log.Println("Running supplier score job...")
 
 	yearMonth := time.Now().AddDate(0, -1, 0).Format("200601")

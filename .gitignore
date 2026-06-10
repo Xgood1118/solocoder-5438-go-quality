@@ -53,6 +53,9 @@ hs_err_pid*.log
 
 # ── Go ──
 vendor/
+*.exe
+*.test
+*.out
 
 # ── Python ──
 __pycache__/

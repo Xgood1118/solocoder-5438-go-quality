@@ -142,7 +142,7 @@ func (s *SupplierScoreService) CalculateAllSuppliers(yearMonth string) []*model.
 
 func (s *SupplierScoreService) GetFocusSuppliers() []*model.Supplier {
 	suppliers := store.GlobalStore.ListSuppliers()
-	var result []*model.Supplier
+	result := make([]*model.Supplier, 0)
 
 	for _, sup := range suppliers {
 		if sup.Status == "red" || sup.Status == "yellow" {

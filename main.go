@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -51,7 +52,7 @@ func main() {
 
 	r.Use(corsMiddleware())
 
-	setupRoutes(r)
+	setupRoutes(r, cronManager)
 
 	port := cfg.Port
 	log.Printf("Server starting on port %s...", port)
@@ -60,7 +61,7 @@ func main() {
 	}
 }
 
-func setupRoutes(r *gin.Engine) {
+func setupRoutes(r *gin.Engine, cronManager *qcron.CronManager) {
 	materialHandler := handler.NewMaterialHandler()
 	supplierHandler := handler.NewSupplierHandler()
 	inspectorHandler := handler.NewInspectorHandler()
@@ -143,6 +144,8 @@ func setupRoutes(r *gin.Engine) {
 			records.POST("/:id/close", recordHandler.Close)
 			records.POST("/:id/remarks", recordHandler.AddRemark)
 			records.POST("/:id/reinspect", recordHandler.Reinspect)
+			records.POST("/:id/concession-approval", recordHandler.CreateConcessionApproval)
+			records.GET("/:id/approval", recordHandler.GetApproval)
 			records.GET("/:id/audit-logs", recordHandler.GetAuditLogs)
 			records.GET("/:id/export/pdf", recordHandler.ExportPDF)
 			records.GET("/lot/:lot_id", recordHandler.GetByLot)
@@ -183,6 +186,33 @@ func setupRoutes(r *gin.Engine) {
 		{
 			ocr.POST("/recognize", ocrHandler.Recognize)
 			ocr.POST("/recognize-mark", ocrHandler.RecognizeMarkVerify)
+		}
+
+		debug := api.Group("/debug")
+		{
+			debug.POST("/cron/patrol", func(c *gin.Context) {
+				before := store.GlobalStore.GetStats()["records"]
+				cronManager.PatrolInspectionJob()
+				after := store.GlobalStore.GetStats()["records"]
+				c.JSON(http.StatusOK, gin.H{
+					"message":          "Patrol inspection job triggered",
+					"records_before":   before,
+					"records_after":    after,
+					"new_records":      after - before,
+				})
+			})
+			debug.POST("/cron/spc", func(c *gin.Context) {
+				cronManager.SPCUpdateJob()
+				c.JSON(http.StatusOK, gin.H{"message": "SPC update job triggered"})
+			})
+			debug.POST("/cron/qms-sync", func(c *gin.Context) {
+				cronManager.QMSSyncJob()
+				c.JSON(http.StatusOK, gin.H{"message": "QMS sync job triggered"})
+			})
+			debug.POST("/cron/supplier-score", func(c *gin.Context) {
+				cronManager.SupplierScoreJob()
+				c.JSON(http.StatusOK, gin.H{"message": "Supplier score job triggered"})
+			})
 		}
 	}
 }

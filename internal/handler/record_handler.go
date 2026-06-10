@@ -140,6 +140,34 @@ func (h *RecordHandler) Update(c *gin.Context) {
 	}
 	if updateData.FinalJudgment != "" {
 		record.FinalJudgment = updateData.FinalJudgment
+
+		lot, _ := store.GlobalStore.GetLot(record.LotID)
+		if record.Type == model.TypeOQC && lot != nil && lot.Quantity > 1000 && !record.IsFullInspection {
+			if updateData.FinalJudgment == model.JudgmentFail || updateData.FinalJudgment == model.JudgmentReject {
+				record.IsFullInspection = true
+				record.TotalSampleSize = lot.Quantity
+
+				remark := model.Remark{
+					ID:        uuid.New().String(),
+					Content:   "抽检不合格，已自动转为全检（原10%抽检→全量检验）",
+					Operator:  "system",
+					CreatedAt: time.Now(),
+				}
+				record.Remarks = append(record.Remarks, remark)
+
+				auditLog := &model.AuditLog{
+					ID:        uuid.New().String(),
+					RecordID:  record.ID,
+					Action:    "oqc_sampling_to_full",
+					OldStatus: string(record.Status),
+					NewStatus: string(record.Status),
+					Operator:  "system",
+					Remark:    "OQC抽检不合格自动转全检",
+					CreatedAt: time.Now(),
+				}
+				store.GlobalStore.SaveAuditLog(auditLog)
+			}
+		}
 	}
 	if updateData.Disposition != "" {
 		record.Disposition = updateData.Disposition
@@ -323,6 +351,45 @@ func (h *RecordHandler) ExportPDF(c *gin.Context) {
 	c.Header("Content-Type", "application/pdf")
 	c.Header("Content-Disposition", "attachment; filename="+fileName)
 	c.Data(http.StatusOK, "application/pdf", pdfData)
+}
+
+func (h *RecordHandler) CreateConcessionApproval(c *gin.Context) {
+	id := c.Param("id")
+	operator := c.GetHeader("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+
+	approval, err := h.recordService.CreateConcessionApproval(id, operator)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"approval_id": approval.ID,
+		"status":      approval.Status,
+		"message":     "让步接收审批已创建，等待质量经理初审",
+	})
+}
+
+func (h *RecordHandler) GetApproval(c *gin.Context) {
+	id := c.Param("id")
+	record, ok := store.GlobalStore.GetRecord(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "record not found"})
+		return
+	}
+	if record.ApprovalID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "this record has no approval flow"})
+		return
+	}
+	approval, ok := store.GlobalStore.GetApproval(record.ApprovalID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "approval not found"})
+		return
+	}
+	c.JSON(http.StatusOK, approval)
 }
 
 func (h *RecordHandler) GetByLot(c *gin.Context) {
